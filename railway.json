@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "buildCommand": "pip install -r requirements.txt && playwright install --with-deps chromium"
+  },
+  "deploy": {
+    "startCommand": "python telegram_bot.py",
+    "restartPolicyType": "ON_FAILURE",
+    "healthcheckPath": null
+  }
+}
