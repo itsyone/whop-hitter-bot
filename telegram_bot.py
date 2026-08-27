@@ -360,18 +360,35 @@ def cmd_addproxy(m):
 
 @bot.message_handler(commands=["whop"])
 def cmd_whop(m):
-    arg = m.text.split(" ", 1)
+    lines = m.text.splitlines()
+    arg = lines[0].split(" ", 1)
     if len(arg) < 2 or not arg[1].strip().startswith("http"):
         bot.send_message(m.chat.id, "✦ /whop `<checkout url>`",
                          parse_mode="Markdown")
         return
     url = arg[1].strip()
-    get_db()["settings"]["checkout_url"] = url
+    db = get_db()
+    # allow pasting cards on the following lines, e.g.
+    #   /whop <url>
+    #   5328398287077228|05|2029|211
+    added = 0
+    if len(lines) > 1:
+        new = parse_ccs("\n".join(lines[1:]))
+        room = 50 - len(db["ccs"])
+        for c in new[:room]:
+            c.update({"status": "", "live": False, "response": "",
+                      "proxy": "", "ts": 0})
+            db["ccs"].append(c)
+            added += 1
+    db["settings"]["checkout_url"] = url
     save_db()
+    PENDING[m.chat.id] = url
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⚡ System Proxies", callback_data="px_sys"))
     kb.add(types.InlineKeyboardButton("➕ Add Own Proxy", callback_data="px_add"))
-    bot.send_message(m.chat.id, "✦ choose proxy source:", reply_markup=kb)
+    card_note = f" · added {added} card(s)" if added else ""
+    bot.send_message(m.chat.id, f"✦ choose proxy source:{card_note}",
+                     reply_markup=kb)
 
 
 @bot.message_handler(commands=["live"])
@@ -400,7 +417,7 @@ AWAIT_PROXY = {}    # chat_id -> checkout url (next msg is a proxy)
 
 @bot.callback_query_handler(func=lambda c: c.data in ("px_sys", "px_add"))
 def cb_proxy(c):
-    url = PENDING.get(c.message.chat.id)
+    url = PENDING.get(c.message.chat.id) or get_db()["settings"].get("checkout_url")
     if not url:
         bot.edit_message_text("⚠️ run /whop first", c.message.chat.id,
                               c.message.message_id)
