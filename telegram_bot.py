@@ -445,5 +445,11 @@ def cb_menu(c):
 
 if __name__ == "__main__":
     load_db()
+    # clear any webhook (e.g. left by a previous/foreign bot on this token)
+    # so long-polling works and no stale updates are replayed
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
     print("[whop checker bot online]")
     bot.infinity_polling()
