@@ -32,7 +32,7 @@ _ah.CONNECT_TIMEOUT = 90
 import whop_bot as W
 
 # token from env (Railway) with a local fallback
-TOKEN = os.environ.get("BOT_TOKEN", "8923114628:AAHUgXvKclwYLDoiNdf2tY9G78F6zLUeCso")
+TOKEN = os.environ.get("BOT_TOKEN", "8735014394:AAEitbTYPpH-m21rlmSg0nCO56DXvd3-Ov0")
 bot = telebot.TeleBot(TOKEN)
 
 DB_FILE = "db.json"
