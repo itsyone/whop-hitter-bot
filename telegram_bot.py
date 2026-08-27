@@ -179,6 +179,11 @@ def send_result(chat_id, res):
     line = (f"{icon} `…{res['last4']}` · {res['status'].upper()}\n"
             f"└ proxy {res['proxy'].replace('http://','')}")
     bot.send_message(chat_id, line, parse_mode="Markdown")
+    # surface the actual error / diagnostic text for failed runs
+    if res["status"] in ("error", "missing"):
+        detail = (res.get("response") or "").strip()
+        if detail:
+            bot.send_message(chat_id, "⚠️ error detail:\n" + detail[:1500])
     if res["status"] == "success":
         try:
             with open(res["screenshot"], "rb") as ph:
@@ -232,8 +237,11 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
             res = W.run_checkout(url, cc, proxy=px, headless=True,
                                  tag=f"tg_{cc['number'][-4:]}")
         except Exception as e:
+            import traceback as _tb
+            _tb_text = _tb.format_exc()
+            print("WORKER ERROR:", _tb_text, flush=True)
             res = {"cc": cc["number"], "last4": cc["number"][-4:],
-                   "status": "error", "response": str(e),
+                   "status": "error", "response": _tb_text,
                    "screenshot": None, "proxy": px["server"]}
         return cc, res
 
