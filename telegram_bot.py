@@ -154,7 +154,7 @@ def add_proxies_tested(chat_id, text):
     if not lines:
         bot.send_message(chat_id, "⚠️ no proxy provided")
         return 0
-    bot.send_message(chat_id, f"✦ testing {len(lines)} proxy(ies)…")
+    msg = bot.send_message(chat_id, "✦ testing proxies…")
     added = 0
     report = []
     for l in lines:
@@ -166,10 +166,19 @@ def add_proxies_tested(chat_id, text):
             report.append(f"✅ `{l}`  ({detail})")
         else:
             report.append(f"⛔ `{l}`  — {detail}")
+        try:
+            bot.edit_message_text("\n".join(report), chat_id, msg.message_id,
+                                  parse_mode="Markdown")
+        except Exception:
+            pass
     save_db()
-    bot.send_message(chat_id, "\n".join(report) +
-                     f"\n\n✦ added {added} · your proxies total {len(db['proxies_user'])}",
-                     parse_mode="Markdown")
+    try:
+        bot.edit_message_text(
+            "\n".join(report) +
+            f"\n\n✦ added {added} · your proxies total {len(db['proxies_user'])}",
+            chat_id, msg.message_id, parse_mode="Markdown")
+    except Exception:
+        pass
     return added
 
 
@@ -227,8 +236,23 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
         return
 
     n = len(target)
-    bot.send_message(chat_id,
-                     f"✦ checking {n} card(s) · 4 workers · proxies {len(proxy_list)}")
+    icon = {"success": "✅", "insufficient": "⚠️", "declined": "⛔",
+            "missing": "❓", "error": "💥"}
+    status_msg = bot.send_message(
+        chat_id,
+        f"✦ checking {n} card(s) · 4 workers · proxies {len(proxy_list)}\n"
+        f"progress 0/{n}\n\n_in progress…_",
+        parse_mode="Markdown")
+
+    def refresh(lines, done):
+        head = (f"✦ checking {n} card(s) · 4 workers · proxies {len(proxy_list)}\n"
+                f"progress {done}/{n}\n\n")
+        try:
+            bot.edit_message_text(head + "\n".join(lines), chat_id,
+                                  status_msg.message_id, parse_mode="Markdown")
+        except Exception:
+            pass
+
     ex = ThreadPoolExecutor(max_workers=4)
 
     def worker(cc, idx):
@@ -245,26 +269,44 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                    "screenshot": None, "proxy": px["server"]}
         return cc, res
 
+    results = []
+    lines = []
     futures = [ex.submit(worker, cc, i) for i, cc in enumerate(target)]
-    paired = []
-    for f in futures:
+    for i, f in enumerate(futures, 1):
         cc, res = f.result()
         record_result(cc, res)
-        send_result(chat_id, res)
-        paired.append((cc, res))
+        # live hit -> separate photo message (pinned)
+        if res["status"] == "success":
+            try:
+                with open(res["screenshot"], "rb") as ph:
+                    msg = bot.send_photo(
+                        chat_id, ph,
+                        caption=f"✅ HIT `…{res['last4']}`\n{res['response'][:600]}")
+                try:
+                    bot.pin_chat_message(chat_id, msg.message_id)
+                except Exception:
+                    pass
+            except Exception as e:
+                bot.send_message(chat_id, f"⚠️ shot err: {e}")
+        # full diagnostic for failures
+        if res["status"] in ("error", "missing"):
+            detail = (res.get("response") or "").strip()
+            if detail:
+                bot.send_message(chat_id, "⚠️ error detail:\n" + detail[:1500])
+        err_note = ""
+        if res["status"] == "error":
+            err_note = " — " + (res.get("response") or "").strip().splitlines()[-1][:80]
+        lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
+                     f"{res['status'].upper()}{err_note}")
+        results.append((cc, res))
+        refresh(lines, i)
     ex.shutdown(wait=False)
 
-    icon = {"success": "✅", "insufficient": "⚠️", "declined": "⛔",
-            "missing": "❓", "error": "💥"}
-    lines = [f"{icon.get(r['status'],'ℹ️')} `…{r['last4']}` {r['status'].upper()}"
-             for _, r in paired]
-    hits = sum(1 for _, r in paired if r["status"] == "success")
-    ins = sum(1 for _, r in paired if r["status"] == "insufficient")
-    bot.send_message(
-        chat_id,
-        "✦ *Results*\n" + "\n".join(lines) +
-        f"\n\n✦ ✅{hits} live · ⚠️{ins} insufficient · use /live to retry",
-        parse_mode="Markdown")
+    hits = sum(1 for _, r in results if r["status"] == "success")
+    ins = sum(1 for _, r in results if r["status"] == "insufficient")
+    lines.append("")
+    lines.append(f"✦ ✅{hits} live · ⚠️{ins} insufficient · use /live to retry")
+    refresh(lines, n)
 
 
 # ---------- database view ----------
@@ -412,7 +454,7 @@ def cmd_whop(m):
     PENDING[m.chat.id] = url
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⚡ System Proxies", callback_data="px_sys"))
-    kb.add(types.InlineKeyboardButton("➕ Add Own Proxy", callback_data="px_add"))
+    kb.add(types.InlineKeyboardButton("➕ Use My Proxies", callback_data="px_add"))
     card_note = f" · added {added} card(s)" if added else ""
     bot.send_message(m.chat.id, f"✦ choose proxy source:{card_note}",
                      reply_markup=kb)
@@ -439,7 +481,6 @@ def cmd_db(m):
 
 
 PENDING = {}        # chat_id -> checkout url (awaiting proxy choice)
-AWAIT_PROXY = {}    # chat_id -> checkout url (next msg is a proxy)
 
 
 @bot.callback_query_handler(func=lambda c: c.data in ("px_sys", "px_add"))
@@ -454,21 +495,16 @@ def cb_proxy(c):
                               c.message.message_id)
         run_check(c.message.chat.id, url, system_proxies())
     else:
-        AWAIT_PROXY[c.message.chat.id] = url
-        bot.edit_message_text("➕ send your proxy: `user:pass@host:port`",
-                              c.message.chat.id, c.message.message_id,
-                              parse_mode="Markdown")
-
-
-@bot.message_handler(func=lambda m: AWAIT_PROXY.get(m.chat.id))
-def await_proxy_msg(m):
-    url = AWAIT_PROXY.pop(m.chat.id)
-    added = add_proxies_tested(m.chat.id, m.text)
-    if added > 0:
-        bot.send_message(m.chat.id, "✦ running with your proxies")
-        run_check(m.chat.id, url, user_proxies() or system_proxies())
-    else:
-        bot.send_message(m.chat.id, "⚠️ no working proxy added — run /whop again")
+        # use the proxies already added via /addproxy
+        ups = user_proxies()
+        if not ups:
+            bot.edit_message_text(
+                "⚠️ no proxies saved yet — add some with /addproxy first",
+                c.message.chat.id, c.message.message_id)
+            return
+        bot.edit_message_text("✦ using your saved proxies", c.message.chat.id,
+                              c.message.message_id)
+        run_check(c.message.chat.id, url, ups)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("m_"))
