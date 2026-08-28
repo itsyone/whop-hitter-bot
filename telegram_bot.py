@@ -531,5 +531,15 @@ if __name__ == "__main__":
         bot.delete_webhook(drop_pending_updates=True)
     except Exception:
         pass
+    # Ensure the Playwright browser binary exists in THIS runtime environment.
+    # Railway's build may install it to a path the running container doesn't
+    # see, so we install it into the runtime's own browser cache at startup.
+    try:
+        import subprocess, sys
+        print("[ensuring chromium is installed…]", flush=True)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                       check=False, timeout=300)
+    except Exception as e:
+        print("[playwright install skipped:", e, "]", flush=True)
     print("[whop checker bot online]")
     bot.infinity_polling()

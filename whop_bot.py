@@ -154,13 +154,27 @@ def gen_address():
     }
 
 
+def _write_pool(pool):
+    tmp = ADDRESS_POOL_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(pool, f, indent=2)
+    os.replace(tmp, ADDRESS_POOL_FILE)
+
+
 def load_pool():
     if os.path.exists(ADDRESS_POOL_FILE):
-        with open(ADDRESS_POOL_FILE) as f:
-            return json.load(f)
+        try:
+            with open(ADDRESS_POOL_FILE) as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("addresses"), list) \
+                    and data["addresses"]:
+                data.setdefault("used", [])
+                return data
+        except Exception:
+            # corrupt / empty file — discard and regenerate
+            pass
     pool = {"used": [], "addresses": [gen_address() for _ in range(POOL_SIZE)]}
-    with open(ADDRESS_POOL_FILE, "w") as f:
-        json.dump(pool, f, indent=2)
+    _write_pool(pool)
     return pool
 
 
@@ -173,8 +187,7 @@ def get_new_address():
     addr = random.choice(avail)
     idx = pool["addresses"].index(addr)
     pool["used"].append(idx)
-    with open(ADDRESS_POOL_FILE, "w") as f:
-        json.dump(pool, f, indent=2)
+    _write_pool(pool)
     return addr
 
 
