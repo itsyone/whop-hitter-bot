@@ -361,6 +361,7 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
     name = rabbit_name()
     if proxy is None:
         proxy = pick_proxy()
+    print(f"[{tag}] START card …{cc['number'][-4:]} via {proxy['server']}", flush=True)
 
     ua = random.choice(USER_AGENTS)
     vw, vh = random.choice(VIEWPORTS)
@@ -391,12 +392,14 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         context.add_init_script(stealth)
         page = context.new_page()
         page.add_init_script(stealth)
+        page.set_default_timeout(30000)
 
-        page.goto(checkout_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(6000)
+        print(f"[{tag}] goto {checkout_url}", flush=True)
+        page.goto(checkout_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
         jitter(page)
         page.mouse.wheel(0, random.randint(120, 360))
-        page.wait_for_timeout(int(human_pause(0.5, 1.5) * 1000))
+        page.wait_for_timeout(int(human_pause(0.4, 1.0) * 1000))
 
         try:
             page.locator('select[name="country"]').first.select_option("US", timeout=4000)
@@ -413,27 +416,28 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
             return bool(cur) and cur.strip() != full and any(c.isalpha() for c in cur) and len(cur.strip()) > 3
 
         selected = False
-        for attempt in range(6):
+        for attempt in range(3):
             el.click()
             el.type(full, delay=human_typing_delay())
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(1500)
             cur = el.input_value()
             if good_sel(cur):
                 selected = True
                 break
             page.keyboard.press("ArrowDown")
             page.keyboard.press("Enter")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(600)
             cur = el.input_value()
             if good_sel(cur):
                 selected = True
                 break
             page.keyboard.press("Enter")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(600)
             cur = el.input_value()
             if good_sel(cur):
                 selected = True
                 break
+        print(f"[{tag}] address selected={selected}", flush=True)
 
         inject_hidden(page, "state", addr["state"])
         jitter(page)
@@ -448,14 +452,15 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         except Exception:
             pass
 
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(4000)
         try:
             page.wait_for_function(
                 "() => { const b=document.querySelector('button[type=submit]'); "
                 "return b && !/process|loading|.../i.test(b.innerText); }",
-                timeout=15000)
+                timeout=10000)
         except Exception:
             pass
+        print(f"[{tag}] submitted, reading result", flush=True)
 
         try:
             resp = page.inner_text("body")
@@ -476,6 +481,7 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
     else:
         status, reason = "success", "Payment approved"
 
+    print(f"[{tag}] DONE status={status}", flush=True)
     return {"cc": cc["number"], "last4": last4, "status": status,
             "response": reason, "screenshot": shot, "proxy": proxy["server"]}
 

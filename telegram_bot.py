@@ -318,7 +318,14 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     lines = []
     futures = [ex.submit(worker, cc, i) for i, cc in enumerate(target)]
     for i, f in enumerate(futures, 1):
-        cc, res = f.result()
+        try:
+            cc, res = f.result(timeout=180)
+        except Exception as e:
+            cc = target[i - 1]
+            res = {"cc": cc["number"], "last4": cc["number"][-4:],
+                   "status": "error", "response": f"watchdog timeout: {e}",
+                   "screenshot": None, "proxy": ""}
+            print(f"WATCHDOG: card …{cc['number'][-4:]} timed out", flush=True)
         record_result(cc, res)
         send_result(chat_id, res)
         lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
