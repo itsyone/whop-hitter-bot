@@ -538,6 +538,13 @@ if __name__ == "__main__":
         bot.delete_webhook(drop_pending_updates=True)
     except Exception:
         pass
+    # overwrite any spammy bot bio/description left by a previous token owner
+    try:
+        bot.set_my_description(
+            "Whop checkout checker bot. Send /start for commands.")
+        bot.set_my_short_description("Whop checkout checker")
+    except Exception:
+        pass
     # Ensure the Playwright browser binary exists in THIS runtime environment.
     # Railway's build may install it to a path the running container doesn't
     # see, so we install it into the runtime's own browser cache at startup.
