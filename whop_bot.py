@@ -467,17 +467,17 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
 
     low = resp.lower()
     if "missing fields" in low:
-        status = "missing"
+        status, reason = "missing", "Missing required fields"
     elif "insufficient" in low:
-        status = "insufficient"
+        status, reason = "insufficient", "Insufficient funds"
     elif ("security reasons" in low or "couldn't be processed" in low
           or "try a different payment" in low or "couldn" in low):
-        status = "declined"
+        status, reason = "declined", "Card declined by issuer"
     else:
-        status = "success"
+        status, reason = "success", "Payment approved"
 
     return {"cc": cc["number"], "last4": last4, "status": status,
-            "response": resp, "screenshot": shot, "proxy": proxy["server"]}
+            "response": reason, "screenshot": shot, "proxy": proxy["server"]}
 
 
 def main():

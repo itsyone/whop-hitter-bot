@@ -155,7 +155,7 @@ def add_proxies_tested(chat_id, text):
     if not lines:
         bot.send_message(chat_id, "⚠️ no proxy provided")
         return 0
-    msg = bot.send_message(chat_id, "✦ testing proxies…")
+    msg = bot.send_message(chat_id, "╭─ 🔍 *TESTING PROXIES*\n└─ in progress…")
     added = 0
     report = []
     for l in lines:
@@ -164,9 +164,9 @@ def add_proxies_tested(chat_id, text):
             if l not in db["proxies_user"]:
                 db["proxies_user"].append(l)
                 added += 1
-            report.append(f"✅ `{l}`  ({detail})")
+            report.append(f"├─ ✅ `{l}`  ({detail})")
         else:
-            report.append(f"⛔ `{l}`  — {detail}")
+            report.append(f"├─ ⛔ `{l}`  — {detail}")
         try:
             bot.edit_message_text("\n".join(report), chat_id, msg.message_id,
                                   parse_mode="Markdown")
@@ -175,37 +175,65 @@ def add_proxies_tested(chat_id, text):
     save_db()
     try:
         bot.edit_message_text(
-            "\n".join(report) +
-            f"\n\n✦ added {added} · your proxies total {len(db['proxies_user'])}",
+            "╭─ 🔍 *PROXY TEST RESULTS*\n" + "\n".join(report) +
+            f"\n└─ ✅ added {added} · your total {len(db['proxies_user'])}",
             chat_id, msg.message_id, parse_mode="Markdown")
     except Exception:
         pass
     return added
 
 
+def fmt_box(res):
+    s = res["status"]
+    last4 = res["last4"]
+    proxy = (res.get("proxy") or "").replace("http://", "").replace("https://", "")
+    if s == "success":
+        head, body, foot = ("✅ 𝐏𝐚𝐲𝐦𝐞𝐧𝐭 𝐀𝐩𝐩𝐫𝐨𝐯𝐞𝐝",
+                            "├─ 💰 𝐂𝐡𝐚𝐫𝐠𝐞𝐝 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥𝐥𝐲",
+                            "╰─ Access granted — saved to ✅ CARDS THAT WORKED.")
+    elif s == "insufficient":
+        head, body, foot = ("❌ 𝐏𝐚𝐲𝐦𝐞𝐧𝐭 𝐃𝐞𝐜𝐥𝐢𝐧𝐞𝐝",
+                            "├─ 💸 𝐈𝐧𝐬𝐮𝐟𝐟𝐢𝐜𝐢𝐞𝐧𝐭 𝐅𝐮𝐧𝐝𝐬",
+                            "╰─ Please add funds or use another payment method.")
+    elif s == "declined":
+        head, body, foot = ("❌ 𝐏𝐚𝐲𝐦𝐞𝐧𝐭 𝐃𝐞𝐜𝐥𝐢𝐧𝐞𝐝",
+                            "├─ 🚫 𝐂𝐚𝐫𝐝 𝐃𝐞𝐜𝐥𝐢𝐧𝐞𝐝 𝐛𝐲 𝐈𝐬𝐬𝐮𝐞𝐫",
+                            "╰─ Please use a different payment method.")
+    elif s == "missing":
+        head, body, foot = ("⚠️ 𝐈𝐧𝐜𝐨𝐦𝐩𝐥𝐞𝐭𝐞",
+                            "├─ 📝 𝐌𝐢𝐬𝐬𝐢𝐧𝐠 𝐑𝐞𝐪𝐮𝐢𝐫𝐞𝐝 𝐅𝐢𝐞𝐥𝐝𝐬",
+                            "╰─ Verify card details and retry.")
+    else:  # error
+        reason = (res.get("response") or "unknown error").strip().splitlines()[-1][:60]
+        head, body, foot = ("💥 𝐂𝐡𝐞𝐜𝐤 𝐄𝐫𝐫𝐨𝐫",
+                            f"├─ ⚠️ {reason}",
+                            "╰─ Check logs or retry with /live.")
+    return (f"╭─ {head}\n"
+            f"│\n"
+            f"├─ 💳 𝐂𝐚𝐫𝐝 •••• {last4}\n"
+            f"{body}\n"
+            f"├─ 🌐 𝐏𝐫𝐨𝐱𝐲 {proxy}\n"
+            f"│\n"
+            f"{foot}")
+
+
 def send_result(chat_id, res):
-    icon = {"success": "✅", "insufficient": "⚠️", "declined": "⛔",
-            "missing": "❓", "error": "💥"}.get(res["status"], "ℹ️")
-    line = (f"{icon} `…{res['last4']}` · {res['status'].upper()}\n"
-            f"└ proxy {res['proxy'].replace('http://','')}")
-    bot.send_message(chat_id, line, parse_mode="Markdown")
-    # surface the actual error / diagnostic text for failed runs
-    if res["status"] in ("error", "missing"):
-        detail = (res.get("response") or "").strip()
-        if detail:
-            bot.send_message(chat_id, "⚠️ error detail:\n" + detail[:1500])
-    if res["status"] == "success":
+    box = fmt_box(res)
+    send_photo = res["status"] in ("success", "insufficient", "declined")
+    pin = res["status"] == "success"
+    if send_photo and res.get("screenshot") and os.path.exists(res["screenshot"]):
         try:
             with open(res["screenshot"], "rb") as ph:
-                msg = bot.send_photo(
-                    chat_id, ph,
-                    caption=f"✅ HIT `…{res['last4']}`\n{res['response'][:600]}")
-            try:
-                bot.pin_chat_message(chat_id, msg.message_id)
-            except Exception:
-                pass
-        except Exception as e:
-            bot.send_message(chat_id, f"⚠️ shot err: {e}")
+                msg = bot.send_photo(chat_id, ph, caption=box)
+            if pin:
+                try:
+                    bot.pin_chat_message(chat_id, msg.message_id)
+                except Exception:
+                    pass
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, box)
 
 
 def record_result(cc, res):
@@ -241,13 +269,20 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
             "missing": "❓", "error": "💥"}
     status_msg = bot.send_message(
         chat_id,
-        f"✦ checking {n} card(s) · 4 workers · proxies {len(proxy_list)}\n"
-        f"progress 0/{n}\n\n_in progress…_",
+        f"╭─ 🚀 *RUN STARTED*\n"
+        f"│\n"
+        f"├─ 💳 cards    : {n}\n"
+        f"├─ ⚡ workers  : 4\n"
+        f"├─ 🌐 proxies  : {len(proxy_list)}\n"
+        f"└─ progress 0/{n} …",
         parse_mode="Markdown")
 
     def refresh(lines, done):
-        head = (f"✦ checking {n} card(s) · 4 workers · proxies {len(proxy_list)}\n"
-                f"progress {done}/{n}\n\n")
+        head = (f"╭─ 🚀 *RUN IN PROGRESS*\n"
+                f"│\n"
+                f"├─ 💳 cards    : {n}\n"
+                f"├─ 🌐 proxies  : {len(proxy_list)}\n"
+                f"└─ progress {done}/{n}\n\n")
         try:
             bot.edit_message_text(head + "\n".join(lines), chat_id,
                                   status_msg.message_id, parse_mode="Markdown")
@@ -285,44 +320,22 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     for i, f in enumerate(futures, 1):
         cc, res = f.result()
         record_result(cc, res)
-        # screenshot for hits (pinned) and for insufficient/declined (for proof)
-        send_shot = False
-        pin_shot = False
-        if res["status"] == "success":
-            send_shot, pin_shot = True, True
-        elif res["status"] in ("insufficient", "declined"):
-            send_shot = True
-        if send_shot and res.get("screenshot") and os.path.exists(res["screenshot"]):
-            cap = (f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
-                   f"{res['status'].upper()}\n{res['response'][:600]}")
-            try:
-                with open(res["screenshot"], "rb") as ph:
-                    msg = bot.send_photo(chat_id, ph, caption=cap)
-                if pin_shot:
-                    try:
-                        bot.pin_chat_message(chat_id, msg.message_id)
-                    except Exception:
-                        pass
-            except Exception as e:
-                bot.send_message(chat_id, f"⚠️ shot err: {e}")
-        # full diagnostic for failures
-        if res["status"] in ("error", "missing"):
-            detail = (res.get("response") or "").strip()
-            if detail:
-                bot.send_message(chat_id, "⚠️ error detail:\n" + detail[:1500])
-        err_note = ""
-        if res["status"] == "error":
-            err_note = " — " + (res.get("response") or "").strip().splitlines()[-1][:80]
+        send_result(chat_id, res)
         lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
-                     f"{res['status'].upper()}{err_note}")
+                     f"{res['status'].upper()}")
         results.append((cc, res))
         refresh(lines, i)
     ex.shutdown(wait=False)
 
     hits = sum(1 for _, r in results if r["status"] == "success")
     ins = sum(1 for _, r in results if r["status"] == "insufficient")
+    dec = sum(1 for _, r in results if r["status"] == "declined")
+    err = sum(1 for _, r in results if r["status"] == "error")
     lines.append("")
-    lines.append(f"✦ ✅{hits} live · ⚠️{ins} insufficient · use /live to retry")
+    lines.append(f"✦ ✅ {hits} live · ⚠️ {ins} insufficient · 🚫 {dec} declined · "
+                 f"💥 {err} error")
+    if ins:
+        lines.append("use /live to retry insufficient")
     refresh(lines, n)
 
 
@@ -337,13 +350,14 @@ def build_db_text():
     other = [c for c in ccs if c.get("status") in ("missing", "error")]
     pend = [c for c in ccs if not c.get("status")]
 
-    t = "📊 *Database*\n"
-    t += f"├ cards total      : {total}\n"
-    t += f"├ ✅ live (worked) : {len(live)}\n"
-    t += f"├ ⚠️ insufficient   : {len(ins)}\n"
-    t += f"├ ⛔ declined       : {len(dec)}\n"
-    t += f"├ ❓ other/error    : {len(other)}\n"
-    t += f"└ ◽ pending        : {len(pend)}\n\n"
+    t = "╭─ 📊 *DATABASE*\n"
+    t += "│\n"
+    t += f"├─ 💳 cards total    : {total}\n"
+    t += f"├─ ✅ live (worked)  : {len(live)}\n"
+    t += f"├─ ⚠️ insufficient    : {len(ins)}\n"
+    t += f"├─ 🚫 declined       : {len(dec)}\n"
+    t += f"├─ 💥 other / error  : {len(other)}\n"
+    t += f"└─ ◽ pending        : {len(pend)}\n\n"
 
     if live:
         t += "✅ *CARDS THAT WORKED ON WHOP:*\n"
@@ -354,8 +368,8 @@ def build_db_text():
     else:
         t += "✅ no working cards yet\n"
 
-    t += (f"\nproxies — system {len(db['proxies_system'])} · "
-          f"your {len(db['proxies_user'])} (tested OK)")
+    t += (f"\n⚡ proxies — system {len(db['proxies_system'])} · "
+           f"your {len(db['proxies_user'])} (tested OK)")
     return t
 
 
@@ -383,15 +397,19 @@ def cmd_start(m):
     kb.add(types.InlineKeyboardButton("▶️ Run /whop", callback_data="m_whop"))
     bot.send_message(
         m.chat.id,
-        "⚡ *Whop Checker*\n\n"
-        "The database is saved automatically — surviving restarts.\n\n"
-        "/ccs — add cards (up to 50)\n"
-        "/whop `<url>` — run check\n"
-        "/proxy — list proxies\n"
-        "/addproxy — add + test your proxy\n"
-        "/live — retry insufficient\n"
-        "/clear — wipe saved cards\n"
-        "/db — view database",
+        "╭─ ⚡ *WHOP CHECKER*\n"
+        "│\n"
+        "├─ 💳 checks cards via Whop checkout\n"
+        "├─ 🌐 rotates proxies + fingerprints\n"
+        "├─ 📊 db auto-saved (survives restarts)\n"
+        "│\n"
+        "├─ /ccs      add cards (max 50)\n"
+        "├─ /whop     run check on a url\n"
+        "├─ /proxy    list proxies\n"
+        "├─ /addproxy add + test your proxy\n"
+        "├─ /live     retry insufficient\n"
+        "├─ /clear    wipe saved cards\n"
+        "└─ /db       view database",
         parse_mode="Markdown", reply_markup=kb)
 
 
@@ -429,9 +447,12 @@ def cmd_ccs(m):
         room -= 1
         added += 1
     save_db()
-    note = f" · {skipped} duplicate(s) skipped" if skipped else ""
+    note = f"\n└─ ⚠️ {skipped} duplicate(s) skipped" if skipped else ""
     bot.send_message(m.chat.id,
-                     f"✦ added {added} · total {len(db['ccs'])}/50{note}")
+                     f"╭─ 💳 *CARDS ADDED*\n"
+                     f"├─ ✅ added  : {added}\n"
+                     f"└─ 📊 total  : {len(db['ccs'])}/50{note}",
+                     parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["clear"])
@@ -441,7 +462,8 @@ def cmd_clear(m):
     db["ccs"] = []
     save_db()
     bot.send_message(m.chat.id,
-                     f"✦ cleared {n} card(s) · use /ccs or /whop to add again",
+                     f"╭─ 🧹 *CARDS CLEARED*\n"
+                     f"└─ removed {n} card(s) · add again with /ccs or /whop",
                      parse_mode="Markdown")
 
 
@@ -450,9 +472,10 @@ def cmd_proxy(m):
     db = get_db()
     bot.send_message(
         m.chat.id,
-        f"✦ proxies\n├ system : {len(db['proxies_system'])}\n"
-        f"└ your    : {len(db['proxies_user'])} (all tested OK)\n\n"
-        f"use /addproxy to append",
+        f"╭─ ⚡ *PROXIES*\n"
+        f"├─ 🖥️ system : {len(db['proxies_system'])}\n"
+        f"└─ 👤 your   : {len(db['proxies_user'])} (all tested OK)\n\n"
+        f"use /addproxy to append more",
         parse_mode="Markdown")
 
 
@@ -505,10 +528,17 @@ def cmd_whop(m):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⚡ System Proxies", callback_data="px_sys"))
     kb.add(types.InlineKeyboardButton("➕ Use My Proxies", callback_data="px_add"))
-    card_note = f" · added {added} card(s)" if added else ""
+    card_note = ""
+    if added:
+        card_note += f"├─ ✅ added {added} card(s)\n"
     if skipped:
-        card_note += f" · {skipped} dup skipped"
-    bot.send_message(m.chat.id, f"✦ choose proxy source:{card_note}",
+        card_note += f"├─ ⚠️ {skipped} dup skipped\n"
+    bot.send_message(m.chat.id,
+                     f"╭─ 🛒 *CHECKOUT READY*\n"
+                     f"│\n"
+                     f"{card_note}"
+                     f"└─ choose a proxy source 👇",
+                     parse_mode="Markdown",
                      reply_markup=kb)
 
 
@@ -523,7 +553,10 @@ def cmd_live(m):
     if not url:
         bot.send_message(m.chat.id, "⚠️ run /whop first so I know the url")
         return
-    bot.send_message(m.chat.id, f"✦ live retry · {len(ins)} insufficient")
+    bot.send_message(m.chat.id,
+                     f"╭─ 🔁 *LIVE RETRY*\n"
+                     f"└─ retrying {len(ins)} insufficient card(s)",
+                     parse_mode="Markdown")
     run_check(m.chat.id, url, all_proxies(), ccs_override=ins)
 
 
