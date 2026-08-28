@@ -14,6 +14,7 @@ import json
 import os
 import random
 import string
+import tempfile
 from playwright.sync_api import sync_playwright
 
 CHECKOUT_URL = "https://whop.com/checkout/2onbgwXn2utmOapDAl-sTbB-xhGu-BQo9-ppzjRbOKz1Pc/"
@@ -155,10 +156,19 @@ def gen_address():
 
 
 def _write_pool(pool):
-    tmp = ADDRESS_POOL_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(pool, f, indent=2)
-    os.replace(tmp, ADDRESS_POOL_FILE)
+    # unique temp file per call so concurrent workers don't clobber each other
+    d = os.path.dirname(os.path.abspath(ADDRESS_POOL_FILE)) or "."
+    fd, tmppath = tempfile.mkstemp(dir=d, prefix="addr_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(pool, f, indent=2)
+        os.replace(tmppath, ADDRESS_POOL_FILE)
+    except Exception:
+        try:
+            os.unlink(tmppath)
+        except OSError:
+            pass
+        raise
 
 
 def load_pool():

