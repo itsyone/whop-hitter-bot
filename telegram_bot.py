@@ -550,6 +550,8 @@ def cmd_whop(m):
     db["settings"]["checkout_url"] = url
     save_db()
     PENDING[m.chat.id] = url
+    # run ONLY the card(s) pasted with this /whop, not the whole saved db
+    PENDING_CARDS[m.chat.id] = new if card_text.strip() else []
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⚡ System Proxies", callback_data="px_sys"))
     kb.add(types.InlineKeyboardButton("➕ Use My Proxies", callback_data="px_add"))
@@ -591,6 +593,7 @@ def cmd_db(m):
 
 
 PENDING = {}        # chat_id -> checkout url (awaiting proxy choice)
+PENDING_CARDS = {}   # chat_id -> cards given inline with /whop (run only those)
 
 
 @bot.callback_query_handler(func=lambda c: c.data in ("px_sys", "px_add"))
@@ -603,7 +606,8 @@ def cb_proxy(c):
     if c.data == "px_sys":
         bot.edit_message_text("✦ using system proxies", c.message.chat.id,
                               c.message.message_id)
-        run_check(c.message.chat.id, url, system_proxies())
+        run_check(c.message.chat.id, url, system_proxies(),
+                  ccs_override=PENDING_CARDS.get(c.message.chat.id) or None)
     else:
         # use the proxies already added via /addproxy
         ups = user_proxies()
@@ -614,7 +618,8 @@ def cb_proxy(c):
             return
         bot.edit_message_text("✦ using your saved proxies", c.message.chat.id,
                               c.message.message_id)
-        run_check(c.message.chat.id, url, ups)
+        run_check(c.message.chat.id, url, ups,
+                  ccs_override=PENDING_CARDS.get(c.message.chat.id) or None)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("m_"))
