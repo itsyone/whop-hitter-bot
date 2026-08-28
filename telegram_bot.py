@@ -219,7 +219,7 @@ def fmt_box(res):
 
 def send_result(chat_id, res):
     box = fmt_box(res)
-    send_photo = res["status"] in ("success", "insufficient", "declined")
+    send_photo = bool(res.get("screenshot") and os.path.exists(res["screenshot"]))
     pin = res["status"] == "success"
     if send_photo and res.get("screenshot") and os.path.exists(res["screenshot"]):
         try:
@@ -267,25 +267,32 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     n = len(target)
     icon = {"success": "✅", "insufficient": "⚠️", "declined": "⛔",
             "missing": "❓", "error": "💥"}
+    kb_stop = types.InlineKeyboardMarkup()
+    kb_stop.add(types.InlineKeyboardButton("🛑 Stop", callback_data="stop"))
+
     status_msg = bot.send_message(
         chat_id,
         f"╭─ 🚀 *RUN STARTED*\n"
         f"│\n"
         f"├─ 💳 cards    : {n}\n"
-        f"├─ ⚡ workers  : 4\n"
+        f"├─ ⚡ workers  : 1\n"
         f"├─ 🌐 proxies  : {len(proxy_list)}\n"
         f"└─ progress 0/{n} …",
-        parse_mode="Markdown")
+        parse_mode="Markdown", reply_markup=kb_stop)
 
-    def refresh(lines, done):
+    def refresh(lines, done, current=None, stop=True):
         head = (f"╭─ 🚀 *RUN IN PROGRESS*\n"
                 f"│\n"
                 f"├─ 💳 cards    : {n}\n"
                 f"├─ 🌐 proxies  : {len(proxy_list)}\n"
                 f"└─ progress {done}/{n}\n\n")
+        body = "\n".join(lines)
+        if current:
+            body += f"\n⏳ checking `…{current}` …"
         try:
-            bot.edit_message_text(head + "\n".join(lines), chat_id,
-                                  status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text(head + body, chat_id,
+                                  status_msg.message_id, parse_mode="Markdown",
+                                  reply_markup=kb_stop if stop else None)
         except Exception:
             pass
 
@@ -334,6 +341,9 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     # can't freeze the rest of the run.
     ex = ThreadPoolExecutor(max_workers=1)
     for i, cc in enumerate(target, 1):
+        if ABORT.get(chat_id):
+            print(f"ABORT: stopping at {i}/{n}", flush=True)
+            break
         refresh(i - 1, cc["number"][-4:])
         px = proxy_list[(i - 1) % len(proxy_list)]
         fut = ex.submit(run_one, cc, px)
@@ -344,6 +354,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                    "status": "error", "response": f"watchdog timeout: {e}",
                    "screenshot": None, "proxy": px["server"]}
             print(f"WATCHDOG: card …{cc['number'][-4:]} timed out", flush=True)
+        ABORT.pop(chat_id, None)
         record_result(cc, res)
         send_result(chat_id, res)
         results.append((cc, res))
@@ -351,6 +362,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                      f"{res['status'].upper()}")
         refresh(i)
     ex.shutdown(wait=False)
+    ABORT.pop(chat_id, None)
 
     hits = sum(1 for _, r in results if r["status"] == "success")
     ins = sum(1 for _, r in results if r["status"] == "insufficient")
@@ -361,7 +373,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                  f"💥 {err} error")
     if ins:
         lines.append("use /live to retry insufficient")
-    refresh(n)
+    refresh(n, stop=False)
 
 
 # ---------- database view ----------
@@ -594,6 +606,7 @@ def cmd_db(m):
 
 PENDING = {}        # chat_id -> checkout url (awaiting proxy choice)
 PENDING_CARDS = {}   # chat_id -> cards given inline with /whop (run only those)
+ABORT = {}           # chat_id -> True when user hits Stop
 
 
 @bot.callback_query_handler(func=lambda c: c.data in ("px_sys", "px_add"))
@@ -620,6 +633,18 @@ def cb_proxy(c):
                               c.message.message_id)
         run_check(c.message.chat.id, url, ups,
                   ccs_override=PENDING_CARDS.get(c.message.chat.id) or None)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "stop")
+def cb_stop(c):
+    ABORT[c.message.chat.id] = True
+    bot.answer_callback_query(c.id, text="🛑 stopping after current card…")
+    try:
+        bot.edit_message_text("🛑 *Stop requested* — finishing current card…",
+                              c.message.chat.id, c.message.message_id,
+                              parse_mode="Markdown")
+    except Exception:
+        pass
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("m_"))

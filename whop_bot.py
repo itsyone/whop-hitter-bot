@@ -469,6 +469,17 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         jitter(page)
         fill_all(page, "line1", addr["line1"])
         jitter(page)
+        # trigger the address autocomplete and accept the first real suggestion
+        # (Whop validates the street against known addresses, so a made-up
+        # street gets rejected — picking a suggestion yields a valid address)
+        try:
+            page.locator('input[name="line1"]').first.click()
+            page.keyboard.press("ArrowDown")
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        jitter(page)
         fill_all(page, "city", addr["city"])
         jitter(page)
         fill_all(page, "state", addr["state"])
@@ -517,15 +528,47 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         browser.close()
 
     low = resp.lower()
-    if "missing fields" in low:
-        status, reason = "missing", "Missing required fields"
-    elif "insufficient" in low:
-        status, reason = "insufficient", "Insufficient funds"
-    elif ("security reasons" in low or "couldn't be processed" in low
-          or "try a different payment" in low or "couldn" in low):
-        status, reason = "declined", "Card declined by issuer"
-    else:
-        status, reason = "success", "Payment approved"
+    # Conservative detection: only approve on an explicit success signal.
+    # Everything else (address/zip invalid, declined, missing, generic error)
+    # is treated as a failure so we never falsely report a charged card.
+    fail_rules = [
+        ("insufficient funds", "insufficient", "Insufficient funds"),
+        ("couldn't be processed", "declined", "Card declined by issuer"),
+        ("could not be processed", "declined", "Card declined by issuer"),
+        ("try a different payment", "declined", "Card declined by issuer"),
+        ("do not honor", "declined", "Card declined by issuer"),
+        ("declined", "declined", "Card declined by issuer"),
+        ("expired", "declined", "Card expired"),
+        ("security reasons", "declined", "Card declined by issuer"),
+        ("invalid address", "missing", "Invalid billing address"),
+        ("address is invalid", "missing", "Invalid billing address"),
+        ("enter a valid address", "missing", "Invalid billing address"),
+        ("wrong address", "missing", "Invalid billing address"),
+        ("invalid zip", "missing", "Invalid ZIP / postal code"),
+        ("zip is invalid", "missing", "Invalid ZIP / postal code"),
+        ("enter a valid zip", "missing", "Invalid ZIP / postal code"),
+        ("postal code is invalid", "missing", "Invalid ZIP / postal code"),
+        ("missing field", "missing", "Missing required fields"),
+        ("required field", "missing", "Missing required fields"),
+        ("this field is required", "missing", "Missing required fields"),
+        ("verify", "error", "Verification failed"),
+        ("payment could not", "declined", "Card declined by issuer"),
+        ("card could not", "declined", "Card declined by issuer"),
+    ]
+    success_kw = ["payment successful", "payment was successful",
+                  "you now have access", "access granted", "order confirmed",
+                  "purchase complete", "thank you for your payment",
+                  "subscription is active", "your subscription", "welcome to"]
+    status = reason = None
+    for kw, st, rs in fail_rules:
+        if kw in low:
+            status, reason = st, rs
+            break
+    if not status:
+        if any(k in low for k in success_kw):
+            status, reason = "success", "Payment approved"
+        else:
+            status, reason = "error", "Unclear result (no clear success/error signal)"
 
     print(f"[{tag}] DONE status={status}", flush=True)
     return {"cc": cc["number"], "last4": last4, "status": status,
