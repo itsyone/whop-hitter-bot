@@ -338,6 +338,54 @@ def fill_any(page, selectors, value):
     return 0
 
 
+# Whop renders duplicate React field blocks, so fill EVERY matching element
+# (visible + clipped) with a JS value-injection fallback for hidden inputs.
+FIELD_SELECTORS = {
+    "name":    ['input[name="name"]', 'input[autocomplete="name"]',
+                'input[name="cardName"]', 'input[placeholder*="Name" i]'],
+    "line1":   ['input[name="line1"]'],
+    "line2":   ['input[name="line2"]'],
+    "city":    ['input[name="city"]'],
+    "state":   ['input[name="state"]', 'select[name="state"]'],
+    "zip":     ['input[name="zip"]'],
+    "country": ['select[name="country"]'],
+    "email":   ['input[name="email"]'],
+}
+
+
+def fill_all(page, key, value):
+    if value in ("", None):
+        return 0
+    done = 0
+    for sel in FIELD_SELECTORS.get(key, []):
+        try:
+            locators = page.locator(sel).all()
+        except Exception:
+            continue
+        for el in locators:
+            try:
+                tag = el.element_handle().evaluate("n => n.tagName.toLowerCase()")
+                if tag == "select":
+                    el.select_option(value=value, timeout=1500)
+                else:
+                    try:
+                        el.fill(value, timeout=2000)
+                    except Exception:
+                        el.evaluate(
+                            """(node, val) => {
+                                const proto = Object.getPrototypeOf(node);
+                                const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                                setter.call(node, val);
+                                node.dispatchEvent(new Event('input', {bubbles:true}));
+                                node.dispatchEvent(new Event('change', {bubbles:true}));
+                            }""", value)
+                done += 1
+            except Exception:
+                continue
+    print(f"[{'ok' if done else 'skip'}] {key} -> {done}", flush=True)
+    return done
+
+
 def fill_card(page, cc=CARD):
     num_f = frame_by_keyword(page, "card-number")
     exp_f = frame_by_keyword(page, "card-expiration")
@@ -415,53 +463,34 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         page.mouse.wheel(0, random.randint(120, 360))
         page.wait_for_timeout(int(human_pause(0.4, 1.0) * 1000))
 
-        try:
-            page.locator('select[name="country"]').first.select_option("US", timeout=4000)
-        except Exception:
-            pass
+        fill_all(page, "country", "US")
         jitter(page)
-        fill_any(page, ['input[name="name"]',
-                        'input[autocomplete="name"]',
-                        'input[name="cardName"]',
-                        'input[placeholder*="Name" i]'], name)
+        fill_all(page, "name", name)
         jitter(page)
-
-        full = f"{addr['line1']}, {addr['city']}, {addr['state']} {addr['zip']}"
-        el = page.locator('input[name="line1"]').first
-
-        def good_sel(cur):
-            return bool(cur) and cur.strip() != full and any(c.isalpha() for c in cur) and len(cur.strip()) > 3
-
-        selected = False
-        for attempt in range(3):
-            el.click()
-            el.type(full, delay=human_typing_delay())
-            page.wait_for_timeout(1500)
-            cur = el.input_value()
-            if good_sel(cur):
-                selected = True
-                break
-            page.keyboard.press("ArrowDown")
-            page.keyboard.press("Enter")
-            page.wait_for_timeout(600)
-            cur = el.input_value()
-            if good_sel(cur):
-                selected = True
-                break
-            page.keyboard.press("Enter")
-            page.wait_for_timeout(600)
-            cur = el.input_value()
-            if good_sel(cur):
-                selected = True
-                break
-        print(f"[{tag}] address selected={selected}", flush=True)
-
-        inject_hidden(page, "state", addr["state"])
+        fill_all(page, "line1", addr["line1"])
         jitter(page)
-        fill_first(page, 'input[name="email"]', email)
+        fill_all(page, "city", addr["city"])
+        jitter(page)
+        fill_all(page, "state", addr["state"])
+        jitter(page)
+        fill_all(page, "zip", addr["zip"])
+        jitter(page)
+        fill_all(page, "email", email)
         jitter(page)
         fill_card(page, cc)
         jitter(page)
+
+        # diagnostic: surface any still-empty required fields before submit
+        try:
+            empties = page.evaluate(
+                """() => Array.from(document.querySelectorAll('input,select,textarea'))
+                    .filter(el => (el.required || el.getAttribute('aria-required')==='true')
+                                  && !String(el.value||'').trim()
+                                  && el.offsetParent!==null)
+                    .map(el => el.name||el.id||el.placeholder||el.type)""")
+            print(f"[{tag}] empty required fields: {empties}", flush=True)
+        except Exception:
+            pass
 
         page.screenshot(path=f"{tag}_{last4}_pre.png", full_page=True)
         try:
