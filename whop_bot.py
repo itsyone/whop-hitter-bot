@@ -478,7 +478,21 @@ def fill_field_strict(page, key, value):
             try:
                 tag = el.element_handle().evaluate("n => n.tagName.toLowerCase()")
                 if tag == "select":
-                    el.select_option(value=value, timeout=2000)
+                    # Whop's <select> options often have value="NY" but
+                    # label="New York"; match by visible label first.
+                    ok = False
+                    for kw, v in (("label", value), ("value", value)):
+                        try:
+                            el.select_option(**{kw: v}, timeout=2000)
+                            ok = True
+                            break
+                        except Exception:
+                            continue
+                    if not ok:
+                        try:
+                            el.evaluate(JS_SET, value)
+                        except Exception:
+                            pass
                 else:
                     el.evaluate("n => { try { n.value = ''; } catch(e){} }")
                     el.focus()
