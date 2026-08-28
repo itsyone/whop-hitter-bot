@@ -264,6 +264,14 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
         except Exception as e:
             import traceback as _tb
             _tb_text = _tb.format_exc()
+            msg = str(e)
+            if "TargetClosedError" in msg or "Executable doesn't exist" in msg:
+                try:
+                    libs = W.chromium_missing_libs()
+                    if libs:
+                        _tb_text += "\n\nCHROMIUM LIB CHECK:\n" + libs
+                except Exception:
+                    pass
             print("WORKER ERROR:", _tb_text, flush=True)
             res = {"cc": cc["number"], "last4": cc["number"][-4:],
                    "status": "error", "response": _tb_text,
@@ -546,14 +554,14 @@ if __name__ == "__main__":
         bot.set_my_short_description("Whop checkout checker")
     except Exception:
         pass
-    # Ensure the Playwright browser binary exists in THIS runtime environment.
-    # Railway's build may install it to a path the running container doesn't
-    # see, so we install it into the runtime's own browser cache at startup.
+    # Ensure the Playwright browser + its system libraries exist in THIS
+    # runtime environment. Railway's build may install to a path the running
+    # container doesn't see, or may skip --with-deps, so we install both here.
     try:
         import subprocess, sys
-        print("[ensuring chromium is installed…]", flush=True)
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
-                       check=False, timeout=300)
+        print("[ensuring chromium + deps are installed…]", flush=True)
+        subprocess.run([sys.executable, "-m", "playwright", "install",
+                        "--with-deps", "chromium"], check=False, timeout=400)
     except Exception as e:
         print("[playwright install skipped:", e, "]", flush=True)
     print("[whop checker bot online]")

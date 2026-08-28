@@ -15,6 +15,8 @@ import os
 import random
 import string
 import tempfile
+import subprocess
+import glob
 from playwright.sync_api import sync_playwright
 
 CHECKOUT_URL = "https://whop.com/checkout/2onbgwXn2utmOapDAl-sTbB-xhGu-BQo9-ppzjRbOKz1Pc/"
@@ -153,6 +155,24 @@ def gen_address():
         "zip": zipc,
         "country": "US",
     }
+
+
+def chromium_missing_libs():
+    """Return the list of missing shared libraries for the Chromium binary,
+    or None if it can't be determined. Useful to diagnose launch crashes."""
+    try:
+        base = os.path.expanduser("~/.cache/ms-playwright")
+        bins = (glob.glob(os.path.join(base, "chromium*", "chrome-linux", "chrome"))
+                + glob.glob(os.path.join(base, "chromium_headless_shell*",
+                                         "chrome-linux", "headless_shell")))
+        if not bins:
+            return "chromium binary not found in " + base
+        out = subprocess.run(["ldd", bins[0]], capture_output=True, text=True,
+                             timeout=30)
+        miss = [ln for ln in out.stdout.splitlines() if "not found" in ln]
+        return "\n".join(miss) if miss else "no missing libs reported by ldd"
+    except Exception as e:
+        return f"(ldd check failed: {e})"
 
 
 def _write_pool(pool):
@@ -356,7 +376,8 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
             args=["--disable-blink-features=AutomationControlled",
                   "--disable-infobars", f"--window-size={vw},{vh}",
                   "--no-sandbox", "--disable-setuid-sandbox",
-                  "--disable-dev-shm-usage", "--disable-gpu"],
+                  "--disable-dev-shm-usage", "--disable-gpu",
+                  "--no-zygote", "--single-process"],
         )
         context = browser.new_context(
             user_agent=ua,
