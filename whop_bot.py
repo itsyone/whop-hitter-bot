@@ -502,10 +502,12 @@ def fill_field_strict(page, key, value):
 
 
 def read_form(page):
-    """Read back the ACTUAL values currently in the page fields."""
-    def getval(sel):
+    """Read back the ACTUAL values currently in the page fields.
+    Uses a SHORT per-field timeout so a missing/unfound field can never
+    stall the run (previously defaulted to 30s each -> multi-minute hang)."""
+    def getval(sel, timeout=1500):
         try:
-            return _norm(page.locator(sel).first.input_value())
+            return _norm(page.locator(sel).first.input_value(timeout=timeout))
         except Exception:
             return ""
     return {
