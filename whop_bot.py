@@ -637,6 +637,21 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         page.mouse.wheel(0, random.randint(120, 360))
         page.wait_for_timeout(int(human_pause(0.4, 1.0) * 1000))
 
+        # Wait for the checkout form to actually render. If it never appears
+        # (dead proxy, login wall, captcha, SPA didn't mount) we fail FAST with
+        # a screenshot instead of silently filling nothing for ~150s.
+        try:
+            page.wait_for_selector(
+                'input[name="line1"], input[name="name"], input[name="email"]',
+                state="visible", timeout=20000)
+        except Exception:
+            print(f"[{tag}] FORM NOT LOADED", flush=True)
+            page.screenshot(path=f"{tag}_{last4}.png", full_page=True)
+            browser.close()
+            return {"cc": cc["number"], "last4": last4, "status": "error",
+                    "response": "Checkout form did not load (proxy/network/login wall?)",
+                    "screenshot": f"{tag}_{last4}.png", "proxy": proxy["server"]}
+
         # ----- STRICT, VALIDATION-FIRST -----
         # 1) validate the SOURCE data before touching the form
         src_errors = validate_address(addr)
