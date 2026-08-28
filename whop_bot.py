@@ -13,6 +13,7 @@ Run: python whop_bot.py
 import json
 import os
 import random
+import re
 import string
 import tempfile
 import subprocess
@@ -352,10 +353,92 @@ FIELD_SELECTORS = {
     "email":   ['input[name="email"]'],
 }
 
+US_STATE_CODES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+}
+US_STATE_FULL = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+}
+US_STATE_FULL_LOWER = {v.lower() for v in US_STATE_FULL.values()}
 
-def fill_all(page, key, value):
+
+def _valid_state(st):
+    st = _norm(st).upper()
+    if not st:
+        return False
+    if st in US_STATE_CODES:
+        return True
+    return st.lower() in US_STATE_FULL_LOWER
+
+
+def _norm(v):
+    return "" if v is None else str(v).strip()
+
+
+def _is_dup(v):
+    """True if v looks like the same token repeated (e.g. '606160601')."""
+    v = _norm(v)
+    if not v:
+        return False
+    half = len(v) // 2
+    if half and v[:half] == v[half:] and v[:half]:
+        return True
+    # exact doubled single token (handles '3307 Maple Avenue3307 Maple Avenue')
+    return v == v[:len(v) // 2] * 2 and len(v) > 1
+
+
+def validate_address(addr):
+    """STRICT, VALIDATION-FIRST check of the SOURCE data before any filling.
+    Returns a list of error strings (empty => valid). Never guesses/invents."""
+    errors = []
+    required = ["name", "line1", "city", "state", "zip", "country"]
+    for f in required:
+        if not _norm(addr.get(f)):
+            errors.append(f"Missing required field: {f}")
+            continue
+        if _is_dup(addr.get(f)):
+            errors.append(f"Duplicate value detected in {f}: {addr.get(f)!r}")
+    zipc = _norm(addr.get("zip"))
+    if _norm(addr.get("country")) == "US":
+        if not re.fullmatch(r"\d{5}", zipc):
+            errors.append(f"Invalid ZIP: {zipc}")
+        if not _valid_state(addr.get("state")):
+            errors.append(f"Invalid state: {addr.get('state')!r}")
+    # no field may contain another field's exact value
+    vals = {f: _norm(addr.get(f)) for f in required if _norm(addr.get(f))}
+    for f, v in vals.items():
+        for g, w in vals.items():
+            if f != g and v and v in w and v != w:
+                errors.append(f"Field '{f}' value leaked into '{g}'")
+    return errors
+
+
+def fill_field_strict(page, key, value):
+    """Fill EVERY matching element for `key` exactly once: clear -> set ->
+    read-back. This prevents the doubled values caused by autocomplete
+    appending onto already-typed text. Returns number of elements filled."""
+    value = _norm(value)
     if value in ("", None):
         return 0
+    # Whop's state <select> uses full names; expand a 2-letter code
+    if key == "state" and value.upper() in US_STATE_FULL:
+        value = US_STATE_FULL[value.upper()]
     done = 0
     for sel in FIELD_SELECTORS.get(key, []):
         try:
@@ -369,7 +452,11 @@ def fill_all(page, key, value):
                     el.select_option(value=value, timeout=1500)
                 else:
                     try:
-                        el.fill(value, timeout=2000)
+                        el.fill("", timeout=1500)        # clear first
+                    except Exception:
+                        pass
+                    try:
+                        el.fill(value, timeout=2000)     # set (replaces)
                     except Exception:
                         el.evaluate(
                             """(node, val) => {
@@ -379,11 +466,66 @@ def fill_all(page, key, value):
                                 node.dispatchEvent(new Event('input', {bubbles:true}));
                                 node.dispatchEvent(new Event('change', {bubbles:true}));
                             }""", value)
+                # verify + repair duplication (value repeated in the field)
+                try:
+                    cur = el.input_value()
+                except Exception:
+                    cur = el.evaluate("n => n.value || ''")
+                if _norm(cur) != value:
+                    # duplicated / leftover -> clear and set once more
+                    try:
+                        el.fill("", timeout=1500)
+                        el.fill(value, timeout=2000)
+                    except Exception:
+                        pass
                 done += 1
             except Exception:
                 continue
     print(f"[{'ok' if done else 'skip'}] {key} -> {done}", flush=True)
     return done
+
+
+def read_form(page):
+    """Read back the ACTUAL values currently in the page fields."""
+    def getval(sel):
+        try:
+            return _norm(page.locator(sel).first.input_value())
+        except Exception:
+            return ""
+    return {
+        "name":  getval('input[name="name"]'),
+        "line1": getval('input[name="line1"]'),
+        "city":  getval('input[name="city"]'),
+        "state": getval('input[name="state"]') or getval('select[name="state"]'),
+        "zip":   getval('input[name="zip"]'),
+        "country": getval('select[name="country"]'),
+        "email": getval('input[name="email"]'),
+    }
+
+
+def validate_form(form):
+    """Final validation of the LIVE page before submission."""
+    errors = []
+    required = ["name", "line1", "city", "state", "zip", "country"]
+    for f in required:
+        v = form.get(f, "")
+        if not v:
+            errors.append(f"Missing required field: {f}")
+            continue
+        if _is_dup(v):
+            errors.append(f"Duplicate value detected in {f}: {v!r}")
+    if form.get("country") == "US":
+        zipc = form.get("zip", "")
+        if not re.fullmatch(r"\d{5}", zipc):
+            errors.append(f"Invalid ZIP: {zipc}")
+        if not _valid_state(form.get("state")):
+            errors.append(f"Invalid state: {form.get('state')!r}")
+    return errors
+
+
+def fill_all(page, key, value):
+    # kept for compatibility; delegates to the strict filler
+    return fill_field_strict(page, key, value)
 
 
 def fill_card(page, cc=CARD):
@@ -420,7 +562,7 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
     result dict: {cc, last4, status, response, screenshot, proxy}."""
     addr = get_new_address()
     email = random_email()
-    name = rabbit_name()
+    name = addr["name"]   # use the SOURCE name exactly — never invent a name
     if proxy is None:
         proxy = pick_proxy()
     print(f"[{tag}] START card …{cc['number'][-4:]} via {proxy['server']}", flush=True)
@@ -463,22 +605,23 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         page.mouse.wheel(0, random.randint(120, 360))
         page.wait_for_timeout(int(human_pause(0.4, 1.0) * 1000))
 
+        # ----- STRICT, VALIDATION-FIRST -----
+        # 1) validate the SOURCE data before touching the form
+        src_errors = validate_address(addr)
+        if src_errors:
+            print(f"[{tag}] SOURCE INVALID: {src_errors}", flush=True)
+            page.screenshot(path=f"{tag}_{last4}.png", full_page=True)
+            browser.close()
+            return {"cc": cc["number"], "last4": last4, "status": "missing",
+                    "response": "Source invalid: " + "; ".join(src_errors),
+                    "screenshot": f"{tag}_{last4}.png", "proxy": proxy["server"]}
+
+        # 2) fill each field exactly once (clear -> set -> read-back repair)
         fill_all(page, "country", "US")
         jitter(page)
         fill_all(page, "name", name)
         jitter(page)
         fill_all(page, "line1", addr["line1"])
-        jitter(page)
-        # trigger the address autocomplete and accept the first real suggestion
-        # (Whop validates the street against known addresses, so a made-up
-        # street gets rejected — picking a suggestion yields a valid address)
-        try:
-            page.locator('input[name="line1"]').first.click()
-            page.keyboard.press("ArrowDown")
-            page.keyboard.press("Enter")
-            page.wait_for_timeout(2000)
-        except Exception:
-            pass
         jitter(page)
         fill_all(page, "city", addr["city"])
         jitter(page)
@@ -491,17 +634,17 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         fill_card(page, cc)
         jitter(page)
 
-        # diagnostic: surface any still-empty required fields before submit
-        try:
-            empties = page.evaluate(
-                """() => Array.from(document.querySelectorAll('input,select,textarea'))
-                    .filter(el => (el.required || el.getAttribute('aria-required')==='true')
-                                  && !String(el.value||'').trim()
-                                  && el.offsetParent!==null)
-                    .map(el => el.name||el.id||el.placeholder||el.type)""")
-            print(f"[{tag}] empty required fields: {empties}", flush=True)
-        except Exception:
-            pass
+        # 3) FINAL validation of the LIVE page — do NOT submit if it fails
+        form = read_form(page)
+        form_errors = validate_form(form)
+        print(f"[{tag}] VALIDATION FORM = {form}", flush=True)
+        if form_errors:
+            print(f"[{tag}] VALIDATION FAILED: {form_errors}", flush=True)
+            page.screenshot(path=f"{tag}_{last4}.png", full_page=True)
+            browser.close()
+            return {"cc": cc["number"], "last4": last4, "status": "missing",
+                    "response": "Validation failed: " + "; ".join(form_errors),
+                    "screenshot": f"{tag}_{last4}.png", "proxy": proxy["server"]}
 
         page.screenshot(path=f"{tag}_{last4}_pre.png", full_page=True)
         try:
