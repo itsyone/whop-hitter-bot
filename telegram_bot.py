@@ -320,7 +320,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     results = []
     lines = []
 
-    refresh(0)
+    refresh(lines, 0)
     # one browser at a time (sequential) — stable on small containers,
     # each result shown live as it completes; per-card watchdog so a hang
     # can't freeze the rest of the run.
@@ -329,7 +329,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
         if ABORT.get(chat_id):
             print(f"ABORT: stopping at {i}/{n}", flush=True)
             break
-        refresh(i - 1, cc["number"][-4:])
+        refresh(lines, i - 1, current=cc["number"][-4:])
         px = proxy_list[(i - 1) % len(proxy_list)]
         fut = ex.submit(run_one, cc, px)
         try:
@@ -345,7 +345,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
         results.append((cc, res))
         lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
                      f"{res['status'].upper()}")
-        refresh(i)
+        refresh(lines, i)
     ex.shutdown(wait=False)
     ABORT.pop(chat_id, None)
 
@@ -358,7 +358,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                  f"💥 {err} error")
     if ins:
         lines.append("use /live to retry insufficient")
-    refresh(n, stop=False)
+    refresh(lines, n, stop=False)
 
 
 # ---------- database view ----------
