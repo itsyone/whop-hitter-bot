@@ -376,8 +376,7 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
             args=["--disable-blink-features=AutomationControlled",
                   "--disable-infobars", f"--window-size={vw},{vh}",
                   "--no-sandbox", "--disable-setuid-sandbox",
-                  "--disable-dev-shm-usage", "--disable-gpu",
-                  "--no-zygote", "--single-process"],
+                  "--disable-dev-shm-usage", "--disable-gpu"],
         )
         context = browser.new_context(
             user_agent=ua,

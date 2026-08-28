@@ -265,7 +265,8 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
             import traceback as _tb
             _tb_text = _tb.format_exc()
             msg = str(e)
-            if "TargetClosedError" in msg or "Executable doesn't exist" in msg:
+            if ("TargetClosedError" in type(e).__name__ or "context or browser closed" in msg
+                    or "Executable doesn't exist" in msg):
                 try:
                     libs = W.chromium_missing_libs()
                     if libs:
@@ -389,6 +390,7 @@ def cmd_start(m):
         "/proxy — list proxies\n"
         "/addproxy — add + test your proxy\n"
         "/live — retry insufficient\n"
+        "/clear — wipe saved cards\n"
         "/db — view database",
         parse_mode="Markdown", reply_markup=kb)
 
@@ -408,16 +410,39 @@ def cmd_ccs(m):
                          parse_mode="Markdown")
         return
     db = get_db()
+    existing = {c.get("raw") for c in db["ccs"]}
     room = 50 - len(db["ccs"])
     if room <= 0:
         bot.send_message(m.chat.id, "⚠️ limit 50 reached")
         return
-    add = new[:room]
-    for c in add:
+    skipped = 0
+    added = 0
+    for c in new:
+        if c["raw"] in existing:
+            skipped += 1
+            continue
+        if room <= 0:
+            break
         c.update({"status": "", "live": False, "response": "", "proxy": "", "ts": 0})
         db["ccs"].append(c)
+        existing.add(c["raw"])
+        room -= 1
+        added += 1
     save_db()
-    bot.send_message(m.chat.id, f"✦ added {len(add)} · total {len(db['ccs'])}/50")
+    note = f" · {skipped} duplicate(s) skipped" if skipped else ""
+    bot.send_message(m.chat.id,
+                     f"✦ added {added} · total {len(db['ccs'])}/50{note}")
+
+
+@bot.message_handler(commands=["clear"])
+def cmd_clear(m):
+    db = get_db()
+    n = len(db["ccs"])
+    db["ccs"] = []
+    save_db()
+    bot.send_message(m.chat.id,
+                     f"✦ cleared {n} card(s) · use /ccs or /whop to add again",
+                     parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["proxy"])
@@ -457,13 +482,22 @@ def cmd_whop(m):
     #   5328398287077228|05|2029|211
     card_text = "\n".join(l for l in blines if not l.strip().startswith("http"))
     added = 0
+    skipped = 0
     if card_text.strip():
+        existing = {c.get("raw") for c in db["ccs"]}
         new = parse_ccs(card_text)
         room = 50 - len(db["ccs"])
-        for c in new[:room]:
+        for c in new:
+            if c["raw"] in existing:
+                skipped += 1
+                continue
+            if room <= 0:
+                break
             c.update({"status": "", "live": False, "response": "",
                       "proxy": "", "ts": 0})
             db["ccs"].append(c)
+            existing.add(c["raw"])
+            room -= 1
             added += 1
     db["settings"]["checkout_url"] = url
     save_db()
@@ -472,6 +506,8 @@ def cmd_whop(m):
     kb.add(types.InlineKeyboardButton("⚡ System Proxies", callback_data="px_sys"))
     kb.add(types.InlineKeyboardButton("➕ Use My Proxies", callback_data="px_add"))
     card_note = f" · added {added} card(s)" if added else ""
+    if skipped:
+        card_note += f" · {skipped} dup skipped"
     bot.send_message(m.chat.id, f"✦ choose proxy source:{card_note}",
                      reply_markup=kb)
 
