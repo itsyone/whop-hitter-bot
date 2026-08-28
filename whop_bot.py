@@ -145,11 +145,28 @@ LAST = ["Mercer", "Vance", "Okafor", "Castellano", "Nakamura", "Reyes", "Bianchi
         "Holloway", "Petrov", "Sullivan", "Abara", "Delacroix", "Voss", "Tran"]
 
 
+# Manual, REAL, valid US addresses (street + city/state/zip that actually
+# match). Whop validates the street, so we use genuine addresses rather than
+# random strings. State stored as full name (Whop's <select> wants full name).
+MANUAL_ADDRESSES = [
+    ("350 5th Ave",            "New York",      "New York",        "10118"),
+    ("30 Rockefeller Plaza",   "New York",      "New York",        "10112"),
+    ("231 W Monroe St",        "Chicago",       "Illinois",        "60606"),
+    ("233 S Wacker Dr",        "Chicago",       "Illinois",        "60606"),
+    ("1600 Amphitheatre Pkwy", "Mountain View", "California",      "94043"),
+    ("1 Infinite Loop",        "Cupertino",     "California",      "95014"),
+    ("200 Santa Monica Pier",  "Santa Monica",  "California",      "90401"),
+    ("400 Broad St",           "Seattle",       "Washington",      "98109"),
+    ("350 5th Ave",            "New York",      "New York",        "10118"),
+    ("1 Apple Park Way",       "Cupertino",     "California",      "95014"),
+]
+
+
 def gen_address():
-    city, st, zipc = random.choice(US_PLACES)
+    line1, city, st, zipc = random.choice(MANUAL_ADDRESSES)
     return {
         "name": f"{random.choice(FIRST)} {random.choice(LAST)}",
-        "line1": f"{random.randint(100, 9999)} {random.choice(STREETS)}",
+        "line1": line1,
         "line2": "",
         "city": city,
         "state": st,
@@ -429,18 +446,30 @@ def validate_address(addr):
     return errors
 
 
+JS_SET = """(node, val) => {
+    const proto = Object.getPrototypeOf(node);
+    const d = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (d && d.set) { d.set.call(node, val); }
+    else { node.value = val; }
+    node.dispatchEvent(new Event('input', {bubbles:true}));
+    node.dispatchEvent(new Event('change', {bubbles:true}));
+}"""
+
+
 def fill_field_strict(page, key, value):
-    """Fill EVERY matching element for `key` exactly once: clear -> set ->
-    read-back. This prevents the doubled values caused by autocomplete
-    appending onto already-typed text. Returns number of elements filled."""
+    """Fill EVERY matching element for `key` with a single React-safe JS
+    setter (no Playwright `fill`, which appends on controlled inputs and
+    caused the doubled values). Whop renders duplicate mirror blocks, so we
+    set all of them; each gets exactly one clear+set, then verified."""
     value = _norm(value)
     if value in ("", None):
         return 0
     # Whop's state <select> uses full names; expand a 2-letter code
     if key == "state" and value.upper() in US_STATE_FULL:
         value = US_STATE_FULL[value.upper()]
+    sels = FIELD_SELECTORS.get(key, [])
     done = 0
-    for sel in FIELD_SELECTORS.get(key, []):
+    for sel in sels:
         try:
             locators = page.locator(sel).all()
         except Exception:
@@ -449,37 +478,24 @@ def fill_field_strict(page, key, value):
             try:
                 tag = el.element_handle().evaluate("n => n.tagName.toLowerCase()")
                 if tag == "select":
-                    el.select_option(value=value, timeout=1500)
+                    el.select_option(value=value, timeout=2000)
                 else:
-                    try:
-                        el.fill("", timeout=1500)        # clear first
-                    except Exception:
-                        pass
-                    try:
-                        el.fill(value, timeout=2000)     # set (replaces)
-                    except Exception:
-                        el.evaluate(
-                            """(node, val) => {
-                                const proto = Object.getPrototypeOf(node);
-                                const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-                                setter.call(node, val);
-                                node.dispatchEvent(new Event('input', {bubbles:true}));
-                                node.dispatchEvent(new Event('change', {bubbles:true}));
-                            }""", value)
-                # verify + repair duplication (value repeated in the field)
+                    el.evaluate("n => { try { n.value = ''; } catch(e){} }")
+                    el.focus()
+                    el.evaluate(JS_SET, value)
+                # verify, retry once if it didn't stick
                 try:
                     cur = el.input_value()
                 except Exception:
                     cur = el.evaluate("n => n.value || ''")
                 if _norm(cur) != value:
-                    # duplicated / leftover -> clear and set once more
                     try:
-                        el.fill("", timeout=1500)
-                        el.fill(value, timeout=2000)
+                        el.evaluate(JS_SET, value)
                     except Exception:
                         pass
                 done += 1
-            except Exception:
+            except Exception as e:
+                print(f"[skip] {key} ({sel}): {e}", flush=True)
                 continue
     print(f"[{'ok' if done else 'skip'}] {key} -> {done}", flush=True)
     return done

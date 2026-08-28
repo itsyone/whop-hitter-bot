@@ -320,21 +320,6 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
     results = []
     lines = []
 
-    def refresh(done, current=None):
-        head = (f"╭─ 🚀 *RUN IN PROGRESS*\n"
-                f"│\n"
-                f"├─ 💳 cards    : {n}\n"
-                f"├─ 🌐 proxies  : {len(proxy_list)}\n"
-                f"└─ progress {done}/{n}\n\n")
-        body = "\n".join(lines)
-        if current:
-            body += f"\n⏳ checking `…{current}` …"
-        try:
-            bot.edit_message_text(head + body, chat_id,
-                                  status_msg.message_id, parse_mode="Markdown")
-        except Exception:
-            pass
-
     refresh(0)
     # one browser at a time (sequential) — stable on small containers,
     # each result shown live as it completes; per-card watchdog so a hang
