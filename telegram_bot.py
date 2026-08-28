@@ -19,7 +19,7 @@ import re
 import threading
 import time
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import telebot
 from telebot import types
@@ -316,22 +316,48 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
 
     results = []
     lines = []
-    futures = [ex.submit(worker, cc, i) for i, cc in enumerate(target)]
-    for i, f in enumerate(futures, 1):
+    prog_lock = threading.Lock()
+    fmap = {}
+
+    def on_done(fut):
+        # called the instant a card finishes — result shows immediately,
+        # regardless of order (so 1 done card reports even if others hang)
         try:
-            cc, res = f.result(timeout=180)
+            cc, res = fut.result()
         except Exception as e:
-            cc = target[i - 1]
+            cc = fmap.get(fut)
             res = {"cc": cc["number"], "last4": cc["number"][-4:],
-                   "status": "error", "response": f"watchdog timeout: {e}",
+                   "status": "error", "response": f"callback error: {e}",
                    "screenshot": None, "proxy": ""}
-            print(f"WATCHDOG: card …{cc['number'][-4:]} timed out", flush=True)
         record_result(cc, res)
         send_result(chat_id, res)
-        lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
-                     f"{res['status'].upper()}")
-        results.append((cc, res))
-        refresh(lines, i)
+        with prog_lock:
+            results.append((cc, res))
+            lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
+                         f"{res['status'].upper()}")
+            refresh(lines, len(results))
+
+    futures = [ex.submit(worker, cc, i) for i, cc in enumerate(target)]
+    for fut, cc in zip(futures, target):
+        fmap[fut] = cc
+        fut.add_done_callback(on_done)
+
+    # cap total runtime so a hung card can't freeze the whole run;
+    # finished cards already reported themselves via on_done
+    done, not_done = wait(futures, timeout=150)
+    for fut in not_done:
+        cc = fmap[fut]
+        res = {"cc": cc["number"], "last4": cc["number"][-4:],
+               "status": "error", "response": "watchdog timeout (card hung)",
+               "screenshot": None, "proxy": ""}
+        print(f"WATCHDOG: card …{cc['number'][-4:]} timed out", flush=True)
+        record_result(cc, res)
+        send_result(chat_id, res)
+        with prog_lock:
+            results.append((cc, res))
+            lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
+                         f"{res['status'].upper()}")
+            refresh(lines, len(results))
     ex.shutdown(wait=False)
 
     hits = sum(1 for _, r in results if r["status"] == "success")
