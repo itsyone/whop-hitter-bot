@@ -289,13 +289,10 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
         except Exception:
             pass
 
-    ex = ThreadPoolExecutor(max_workers=4)
-
-    def worker(cc, idx):
-        px = proxy_list[idx % len(proxy_list)]
+    def run_one(cc, px):
         try:
-            res = W.run_checkout(url, cc, proxy=px, headless=True,
-                                 tag=f"tg_{cc['number'][-4:]}")
+            return W.run_checkout(url, cc, proxy=px, headless=True,
+                                  tag=f"tg_{cc['number'][-4:]}")
         except Exception as e:
             import traceback as _tb
             _tb_text = _tb.format_exc()
@@ -309,55 +306,50 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                 except Exception:
                     pass
             print("WORKER ERROR:", _tb_text, flush=True)
-            res = {"cc": cc["number"], "last4": cc["number"][-4:],
-                   "status": "error", "response": _tb_text,
-                   "screenshot": None, "proxy": px["server"]}
-        return cc, res
+            return {"cc": cc["number"], "last4": cc["number"][-4:],
+                    "status": "error", "response": _tb_text,
+                    "screenshot": None, "proxy": px["server"]}
 
     results = []
     lines = []
-    prog_lock = threading.Lock()
-    fmap = {}
 
-    def on_done(fut):
-        # called the instant a card finishes — result shows immediately,
-        # regardless of order (so 1 done card reports even if others hang)
+    def refresh(done, current=None):
+        head = (f"╭─ 🚀 *RUN IN PROGRESS*\n"
+                f"│\n"
+                f"├─ 💳 cards    : {n}\n"
+                f"├─ 🌐 proxies  : {len(proxy_list)}\n"
+                f"└─ progress {done}/{n}\n\n")
+        body = "\n".join(lines)
+        if current:
+            body += f"\n⏳ checking `…{current}` …"
         try:
-            cc, res = fut.result()
+            bot.edit_message_text(head + body, chat_id,
+                                  status_msg.message_id, parse_mode="Markdown")
+        except Exception:
+            pass
+
+    refresh(0)
+    # one browser at a time (sequential) — stable on small containers,
+    # each result shown live as it completes; per-card watchdog so a hang
+    # can't freeze the rest of the run.
+    ex = ThreadPoolExecutor(max_workers=1)
+    for i, cc in enumerate(target, 1):
+        refresh(i - 1, cc["number"][-4:])
+        px = proxy_list[(i - 1) % len(proxy_list)]
+        fut = ex.submit(run_one, cc, px)
+        try:
+            res = fut.result(timeout=150)
         except Exception as e:
-            cc = fmap.get(fut)
             res = {"cc": cc["number"], "last4": cc["number"][-4:],
-                   "status": "error", "response": f"callback error: {e}",
-                   "screenshot": None, "proxy": ""}
+                   "status": "error", "response": f"watchdog timeout: {e}",
+                   "screenshot": None, "proxy": px["server"]}
+            print(f"WATCHDOG: card …{cc['number'][-4:]} timed out", flush=True)
         record_result(cc, res)
         send_result(chat_id, res)
-        with prog_lock:
-            results.append((cc, res))
-            lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
-                         f"{res['status'].upper()}")
-            refresh(lines, len(results))
-
-    futures = [ex.submit(worker, cc, i) for i, cc in enumerate(target)]
-    for fut, cc in zip(futures, target):
-        fmap[fut] = cc
-        fut.add_done_callback(on_done)
-
-    # cap total runtime so a hung card can't freeze the whole run;
-    # finished cards already reported themselves via on_done
-    done, not_done = wait(futures, timeout=150)
-    for fut in not_done:
-        cc = fmap[fut]
-        res = {"cc": cc["number"], "last4": cc["number"][-4:],
-               "status": "error", "response": "watchdog timeout (card hung)",
-               "screenshot": None, "proxy": ""}
-        print(f"WATCHDOG: card …{cc['number'][-4:]} timed out", flush=True)
-        record_result(cc, res)
-        send_result(chat_id, res)
-        with prog_lock:
-            results.append((cc, res))
-            lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
-                         f"{res['status'].upper()}")
-            refresh(lines, len(results))
+        results.append((cc, res))
+        lines.append(f"{icon.get(res['status'],'ℹ️')} `…{res['last4']}` "
+                     f"{res['status'].upper()}")
+        refresh(i)
     ex.shutdown(wait=False)
 
     hits = sum(1 for _, r in results if r["status"] == "success")
@@ -369,7 +361,7 @@ def run_check(chat_id, url, proxy_list, ccs_override=None):
                  f"💥 {err} error")
     if ins:
         lines.append("use /live to retry insufficient")
-    refresh(lines, n)
+    refresh(n)
 
 
 # ---------- database view ----------

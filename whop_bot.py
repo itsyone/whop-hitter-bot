@@ -324,6 +324,20 @@ def fill_first(page, sel, value):
         return 0
 
 
+def fill_any(page, selectors, value):
+    """Try several selectors for the same field; Whop's form field names
+    vary, so fall back through known possibilities."""
+    for sel in selectors:
+        try:
+            page.locator(sel).first.fill(value, timeout=2500)
+            print(f"[ok] {sel} -> name")
+            return 1
+        except Exception:
+            continue
+    print("[skip] name (no selector matched)")
+    return 0
+
+
 def fill_card(page, cc=CARD):
     num_f = frame_by_keyword(page, "card-number")
     exp_f = frame_by_keyword(page, "card-expiration")
@@ -406,7 +420,10 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         except Exception:
             pass
         jitter(page)
-        fill_first(page, 'input[name="name"]', name)
+        fill_any(page, ['input[name="name"]',
+                        'input[autocomplete="name"]',
+                        'input[name="cardName"]',
+                        'input[placeholder*="Name" i]'], name)
         jitter(page)
 
         full = f"{addr['line1']}, {addr['city']}, {addr['state']} {addr['zip']}"
