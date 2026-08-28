@@ -393,6 +393,7 @@ US_STATE_FULL = {
     "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
 }
 US_STATE_FULL_LOWER = {v.lower() for v in US_STATE_FULL.values()}
+US_STATE_ABBR = {v: k for k, v in US_STATE_FULL.items()}
 
 
 def _valid_state(st):
@@ -460,26 +461,54 @@ def fill_field_strict(page, key, value):
     """Fill EVERY matching element for `key` with a single React-safe JS
     setter (no Playwright `fill`, which appends on controlled inputs and
     caused the doubled values). Whop renders duplicate mirror blocks, so we
-    set all of them; each gets exactly one clear+set, then verified."""
+    set all of them; each gets exactly one clear+set, then verified.
+
+    CRITICAL (Whop-specific): the `state` field is a CONDITIONAL <select
+    name="state"> that only RENDERS AFTER the address line 1 (and other
+    address fields) have been filled. Its option VALUES are 2-letter codes
+    ("NY") while the visible labels are full names ("New York"). So we must
+    (a) be called AFTER line1 is filled, and (b) match by value code first,
+    then by full-name label, and also sync the hidden mirror input."""
     value = _norm(value)
     if value in ("", None):
         return 0
-    # Whop's state <select> uses full names; expand a 2-letter code
-    if key == "state" and value.upper() in US_STATE_FULL:
-        value = US_STATE_FULL[value.upper()]
+    # Pre-compute state abbrev/full for the conditional <select name="state">
+    st_abbr = st_full = None
+    if key == "state":
+        v = value.strip().upper()
+        if v in US_STATE_FULL:
+            st_abbr, st_full = v, US_STATE_FULL[v]
+        elif v in US_STATE_ABBR:
+            st_abbr, st_full = US_STATE_ABBR[v], v
+        else:
+            st_abbr = st_full = value
     sels = FIELD_SELECTORS.get(key, [])
     done = 0
     for sel in sels:
         try:
-            locators = page.locator(sel).all()
+            locs = page.locator(sel).all()
         except Exception:
             continue
-        for el in locators:
+        for el in locs:
             try:
                 tag = el.element_handle().evaluate("n => n.tagName.toLowerCase()")
-                if tag == "select":
-                    # Whop's <select> options often have value="NY" but
-                    # label="New York"; match by visible label first.
+                if key == "state" and tag == "select":
+                    # options use value="NY", label="New York"
+                    ok = False
+                    for kw, v in (("value", st_abbr), ("label", st_full)):
+                        try:
+                            el.select_option(**{kw: v}, timeout=3000)
+                            ok = True
+                            break
+                        except Exception:
+                            continue
+                    if not ok:
+                        try:
+                            el.evaluate(JS_SET, st_abbr)
+                        except Exception:
+                            pass
+                    target = st_abbr
+                elif tag == "select":
                     ok = False
                     for kw, v in (("label", value), ("value", value)):
                         try:
@@ -493,18 +522,22 @@ def fill_field_strict(page, key, value):
                             el.evaluate(JS_SET, value)
                         except Exception:
                             pass
+                    target = value
                 else:
+                    # text-like field or hidden mirror input
+                    setval = st_abbr if key == "state" else value
                     el.evaluate("n => { try { n.value = ''; } catch(e){} }")
                     el.focus()
-                    el.evaluate(JS_SET, value)
+                    el.evaluate(JS_SET, setval)
+                    target = setval
                 # verify, retry once if it didn't stick
                 try:
                     cur = el.input_value()
                 except Exception:
                     cur = el.evaluate("n => n.value || ''")
-                if _norm(cur) != value:
+                if _norm(cur) != _norm(target):
                     try:
-                        el.evaluate(JS_SET, value)
+                        el.evaluate(JS_SET, target)
                     except Exception:
                         pass
                 done += 1
@@ -513,6 +546,22 @@ def fill_field_strict(page, key, value):
                 continue
     print(f"[{'ok' if done else 'skip'}] {key} -> {done}", flush=True)
     return done
+
+
+def wait_for_state_select(page, timeout=10000):
+    """Whop's state <select> only appears once address line 1 is filled.
+    Poll for it so we never try to fill state before it exists."""
+    step = 400
+    waited = 0
+    while waited < timeout:
+        try:
+            if page.locator('select[name="state"]').count() > 0:
+                return True
+        except Exception:
+            pass
+        page.wait_for_timeout(step)
+        waited += step
+    return False
 
 
 def read_form(page):
@@ -664,6 +713,10 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
                     "screenshot": f"{tag}_{last4}.png", "proxy": proxy["server"]}
 
         # 2) fill each field exactly once (clear -> set -> read-back repair)
+        # IMPORTANT ORDER: Whop only renders the `state` <select> AFTER the
+        # address line 1 (and other address fields) are filled. So we fill
+        # country/name/line1/city/zip FIRST, then wait for the state select
+        # to appear, THEN fill state. Filling state too early = silent no-op.
         fill_all(page, "country", "US")
         jitter(page)
         fill_all(page, "name", name)
@@ -672,9 +725,10 @@ def run_checkout(checkout_url, cc, proxy=None, headless=True, tag="run"):
         jitter(page)
         fill_all(page, "city", addr["city"])
         jitter(page)
-        fill_all(page, "state", addr["state"])
-        jitter(page)
         fill_all(page, "zip", addr["zip"])
+        jitter(page)
+        wait_for_state_select(page, timeout=10000)
+        fill_all(page, "state", addr["state"])
         jitter(page)
         fill_all(page, "email", email)
         jitter(page)
